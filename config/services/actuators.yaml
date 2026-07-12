@@ -1,0 +1,6 @@
+driver: mock  # servo_can na docelowym sprzęcie
+driver_args:
+  channel: can0
+  bitrate: 500000
+  can_id_map:
+    tool_servo: 0x210

@@ -1,0 +1,4 @@
+rover_id: rover-01
+mqtt:
+  host: localhost
+  port: 1883

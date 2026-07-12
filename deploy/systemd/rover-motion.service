@@ -1,0 +1,16 @@
+[Unit]
+Description=Rover motion control service
+After=network.target mosquitto.service
+Requires=mosquitto.service
+
+[Service]
+Type=simple
+User=rover
+WorkingDirectory=/opt/rover
+Environment=ROVER_CONFIG_DIR=/opt/rover/config
+ExecStart=/opt/rover/.venv/bin/python -m rover.services.motion_control.main
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target

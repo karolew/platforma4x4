@@ -1,0 +1,4 @@
+driver: basic_follow
+driver_args:
+  cruise_speed_kmh: 2.0
+  steer_gain: 1.0

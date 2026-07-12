@@ -1,0 +1,4 @@
+driver: mock  # stm32_can na docelowym sprzęcie
+driver_args:
+  channel: can0
+  bitrate: 500000

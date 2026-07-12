@@ -1,0 +1,4 @@
+driver: mock  # can_collision na docelowym sprzęcie
+driver_args:
+  channel: can0
+  bitrate: 500000

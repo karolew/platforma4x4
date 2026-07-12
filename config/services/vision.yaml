@@ -1,0 +1,4 @@
+driver: mock  # opencv_path na docelowym sprzęcie
+driver_args:
+  camera_index: 0
+  resolution: [640, 480]
