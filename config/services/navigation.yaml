@@ -1,5 +1,12 @@
 driver: mock  # rtk_gnss na docelowym sprzęcie
 driver_args:
-  port: /dev/ttyACM0
+  uart_port: /dev/ttyAMA0
   baudrate: 460800
-  ntrip_url: ""
+  mux_select_gpio: 17  # BCM, CD4052 select: 0=Base (praca normalna), 1=Rover (tylko konfiguracja)
+  gga_interval_s: 300  # throttling GGA->NTRIP; testy = rower stoi w miejscu, zmniejszyc gdy w ruchu
+  ntrip:
+    host: ""
+    port: 2101
+    mountpoint: ""
+    user: ""
+    password: ""

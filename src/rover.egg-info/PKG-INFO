@@ -1,0 +1,24 @@
+Metadata-Version: 2.4
+Name: rover
+Version: 0.1.0
+Requires-Python: >=3.12
+Requires-Dist: pydantic>=2
+Requires-Dist: pyyaml
+Requires-Dist: aiomqtt
+Provides-Extra: motion
+Requires-Dist: python-can; extra == "motion"
+Provides-Extra: sensors
+Requires-Dist: python-can; extra == "sensors"
+Provides-Extra: navigation
+Requires-Dist: pyserial; extra == "navigation"
+Requires-Dist: gpiozero; extra == "navigation"
+Provides-Extra: vision
+Requires-Dist: opencv-python-headless; extra == "vision"
+Requires-Dist: numpy; extra == "vision"
+Provides-Extra: actuators
+Requires-Dist: python-can; extra == "actuators"
+Provides-Extra: planner
+Requires-Dist: httpx; extra == "planner"
+Requires-Dist: websockets; extra == "planner"
+Provides-Extra: all
+Requires-Dist: rover[actuators,motion,navigation,planner,sensors,vision]; extra == "all"
