@@ -11,7 +11,7 @@ dependencies = [
 [project.optional-dependencies]
 motion = ["python-can"]
 sensors = ["python-can"]
-navigation = ["pyserial", "gpiozero"]
+navigation = ["pyserial", "gpiozero", "lgpio"]
 vision = ["opencv-python-headless", "numpy"]
 actuators = ["python-can"]
 planner = ["httpx", "websockets"]

@@ -79,7 +79,7 @@ sudo systemctl stop mosquitto   # wystartuje docelowo jako część configu poni
 
 ```bash
 sudo useradd -r -m -d /opt/rover -s /usr/sbin/nologin rover
-sudo usermod -aG dialout,spi rover   # dostęp do CAN/serial
+sudo usermod -aG dialout,spi,gpio rover   # dostęp do CAN/serial/GPIO (mux select PX1122R)
 ```
 
 ## 7. Wgranie kodu
