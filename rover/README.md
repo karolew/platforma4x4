@@ -39,19 +39,17 @@ sudo reboot
    ```bash
    candump can0
    ```
-5. Podniesienie `can0` na starcie — utwórz `/etc/systemd/network/80-can.network`:
-   ```ini
-   [Match]
-   Name=can0
-
-   [CAN]
-   BitRate=500000
-
-   [Link]
-   RequiredForOnline=no
-   ```
+5. Podniesienie `can0` na starcie i automatyczny restart po `bus-off`:
    ```bash
-   sudo systemctl enable systemd-networkd
+   sudo cp /opt/rover/deploy/network/80-can.network /etc/systemd/network/
+   sudo systemctl enable --now systemd-networkd
+   ```
+   Plik (`rover/deploy/network/80-can.network`) podnosi `can0` niezależnie od kolejności bootu (systemd-networkd czeka na pojawienie się interfejsu, więc nie ma znaczenia czy HW-184 była zasilona przed czy po restarcie RPi — MCP2515 i tak dostaje reset po SPI przy każdym boocie). `RestartSec=100ms` włącza automatyczny restart kontrolera po przejściu w stan `bus-off` (np. gdy magistrala chwilowo ma tylko jeden węzeł i nie ma kto dać ACK) — bez tego `can0` zostaje trwale martwy aż do ręcznego `down`/`up`.
+
+   Weryfikacja po reboocie:
+   ```bash
+   networkctl status can0
+   ip -details -statistics link show can0
    ```
 
 ## 4. Python 3.13
@@ -164,7 +162,7 @@ Powyższe powinno pokazywać przepływające wiadomości na topikach `rover/<rov
 
 ## Aktualizacja kodu (redeploy)
 
-Do szybkich iteracji nad kodem (bez zmian w zależnościach/pyproject) służy `deploy/sync-rover.sh` — kopiuje tylko `src/`, zostawia `config/` na RPi nietknięty (chyba że podasz nowy `rover_id`), i restartuje wszystkie serwisy. Jest już na RPi po kroku 7 (część `deploy/`), trzeba go tylko raz uczynić wykonywalnym:
+Do iteracji nad kodem służy `deploy/sync-rover.sh` — synchronizuje całą zawartość `rover/` (`src/`, `pyproject.toml`, `deploy/`, ...) **poza** `config/` (zostaje nietknięty na RPi, chyba że podasz nowy `rover_id` — zawiera dane per-rover jak poświadczenia NTRIP, których nie ma w repo) i `.venv/` (nigdy nie jest częścią payloadu, więc `--delete` by je skasowało). Jeśli `pyproject.toml` się zmienił, skrypt wypisze przypomnienie o ręcznym `pip install -e ...` w venv (sync nie robi tego automatycznie). Na końcu restartuje wszystkie serwisy. Skrypt jest już na RPi po kroku 7 (część `deploy/`), trzeba go tylko raz uczynić wykonywalnym:
 
 ```bash
 chmod +x /opt/rover/deploy/sync-rover.sh
@@ -187,7 +185,7 @@ bash /opt/rover/deploy/sync-rover.sh            # bez zmiany rover_id
 bash /opt/rover/deploy/sync-rover.sh robal-002   # ze zmianą rover_id
 ```
 
-Skrypt sam usuwa `/tmp/rover-deploy` na końcu, więc kolejny `scp -r` zawsze trafia na nieistniejący katalog docelowy (bezpieczne pod kątem opisanej wyżej pułapki `scp -r`). Jeśli zmieniły się zależności (`pyproject.toml`) albo systemd unity (`deploy/systemd/*.service`) — to trzeba zaktualizować ręcznie, `sync-rover.sh` tego celowo nie robi (patrz kroki 8 i 11).
+Skrypt sam usuwa `/tmp/rover-deploy` na końcu, więc kolejny `scp -r` zawsze trafia na nieistniejący katalog docelowy (bezpieczne pod kątem opisanej wyżej pułapki `scp -r`). `pyproject.toml` i `deploy/*` trafiają teraz na RPi razem z resztą, ale **nie są automatycznie stosowane**: zmiana zależności wymaga ręcznego `pip install -e ...` w venv (skrypt o tym przypomni), a zmiana systemd unitów (`deploy/systemd/*.service`) czy sieciowych (`deploy/network/*.network`) wymaga ręcznego `cp` do `/etc/systemd/...` + `daemon-reload`/`enable` (patrz kroki 8, 11 i 3.5) — samo skopiowanie do `/opt/rover/deploy/` nic w działającym systemie nie zmienia.
 
 ## Troubleshooting
 

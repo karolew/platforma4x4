@@ -1,3 +1,7 @@
 .idea
+.claude
+.venv
+plan.odt
+platforma4x4.md
 .git
-*__pycache__*
+**/__pycache__/

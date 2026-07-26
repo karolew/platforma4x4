@@ -1,4 +1,6 @@
-"""Wspolny UART0 do obu PX1122R, przelaczany CD4052 (1 pin select: 0=Base, 1=Rover).
+"""Wspolny UART0 do obu PX1122R, przelaczany 74HC4053 (A/B/C zwarte na 1 pin
+select GPIO17/pin11: 0=Base, 1=Rover). RPi pin 8 (TXD) -> wejscie Y, pin 10
+(RXD) -> wejscie Z.
 
 Normalna praca (RtkGnssProvider) trzyma select na Base na stale - przelaczanie na
 Rover sluzy WYLACZNIE jednorazowej/on-demand konfiguracji (Px1122rConfigClient),
@@ -39,7 +41,7 @@ class Px1122rBus:
 
     async def select(self, target: Target) -> None:
         self.select_sync(target)
-        await asyncio.sleep(0.01)  # czas ustabilizowania CD4052
+        await asyncio.sleep(0.01)  # czas ustabilizowania 74HC4053
 
     async def write(self, data: bytes) -> None:
         assert self._serial is not None

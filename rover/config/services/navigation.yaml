@@ -2,7 +2,7 @@ driver: mock  # rtk_gnss na docelowym sprzęcie
 driver_args:
   uart_port: /dev/ttyAMA0
   baudrate: 460800
-  mux_select_gpio: 17  # BCM, CD4052 select: 0=Base (praca normalna), 1=Rover (tylko konfiguracja)
+  mux_select_gpio: 17  # BCM (pin 11), 74HC4053 A/B/C select: 0=Base (praca normalna), 1=Rover (tylko konfiguracja)
   gga_interval_s: 300  # throttling GGA->NTRIP; testy = rower stoi w miejscu, zmniejszyc gdy w ruchu
   ntrip:
     host: ""
