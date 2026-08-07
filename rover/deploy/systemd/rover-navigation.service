@@ -8,6 +8,7 @@ Type=simple
 User=rover
 WorkingDirectory=/opt/rover
 Environment=ROVER_CONFIG_DIR=/opt/rover/config
+Environment=PYTHONUNBUFFERED=1
 ExecStart=/opt/rover/.venv/bin/python -m rover.services.navigation.main
 Restart=on-failure
 RestartSec=2

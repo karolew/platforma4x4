@@ -6,25 +6,40 @@ zadanie. Kody komend (message ID) wg SkyTraq AN0039 - do uzupelnienia.
 from __future__ import annotations
 
 import asyncio
+import struct
 
 from rover.services.navigation.gnss.px1122r_bus import Px1122rBus, Target
-from rover.services.navigation.gnss.px1122r_protocol import decode_message, encode_message
+from rover.services.navigation.gnss.px1122r_protocol import START, FrameError, decode_message, encode_message
 
 _ACK = 0x83
 _NACK = 0x84
 _RATE_RESPONSE = 0x86
 
-_MODE_MSG = 0x2E  # tryb pracy (differential mode)
-_MODE_BASE = 0x02
-_MODE_ROVER = 0x01
-_MODE_RTCM_OFF = 0x00
+_SERIAL_PORT_MSG = 0x05  # standardowa komenda SkyTraq "Configure Serial Port" (nie w AN0039 tego modulu)
+_BAUD_RATE_IDS = {4800: 0, 9600: 1, 19200: 2, 38400: 3, 57600: 4, 115200: 5, 230400: 6, 460800: 7, 921600: 8}
 
-_RTCM_MSG = 0x64  # wspolny z baseline (sub-id 0x21) - ogolna komenda "configure X"
-_RTCM_1005_BASE_POSITION = 0x02
-_RTCM_1074_GPS = 0x11
-_RTCM_1084_GLONASS = 0x12
-_RTCM_1094_GALILEO = 0x13
-_RTCM_1124_BEIDOU = 0x14
+_SYSTEM_RESTART_MSG = 0x01  # standardowa komenda SkyTraq "System Restart" (bazowy protokol calej rodziny SkyTraq, nie w AN0039 tego modulu - wymaga potwierdzenia na sprzecie)
+RESTART_HOT = 0
+RESTART_WARM = 1
+RESTART_COLD = 2
+RESTART_TEST = 3  # GPS-only test mode - formalnie tryb startu, nie "restart"
+
+_RTK_MODE_MSG = 0x6A  # AN0028 (SkyTraq Venus 8) "Configure RTK Mode and Operational Function" - nieudokumentowane dla PX1122R, do potwierdzenia
+_RTK_MODE_CONFIGURE_SID = 0x06
+_RTK_MODE_QUERY_SID = 0x07
+_RTK_MODE_RESPONSE_SID = 0x83  # kolizja z _ACK generycznym - bez znaczenia, to sub-id wewnatrz body 0x6A, nie top-level msg_id
+
+RTK_MODE_ROVER = 0
+RTK_MODE_BASE = 1
+RTK_MODE_PRECISE_KINEMATIC_BASE = 2
+
+RTK_ROVER_FUNC_NORMAL = 0
+RTK_ROVER_FUNC_FLOAT = 1
+RTK_ROVER_FUNC_MOVING_BASE = 2
+
+RTK_BASE_FUNC_KINEMATIC = 0
+RTK_BASE_FUNC_SURVEY = 1
+RTK_BASE_FUNC_STATIC = 2
 
 
 class Px1122rConfigClient:
@@ -32,13 +47,65 @@ class Px1122rConfigClient:
         self._bus = bus
         self._target = target
         self._lock = asyncio.Lock()
+        self._buf = bytearray()
 
-    async def _request(self, msg_id: int, body: bytes = b"", response_size: int = 256) -> tuple[int, bytes]:
+    async def _read_frame(self) -> bytes:
+        """Zwraca jedna pelna ramke START..END, pomijajac NMEA/szum przed START.
+
+        Modul strumieniuje NMEA rownolegle z odpowiedziami binarnymi na tym samym
+        UART, wiec bufor moze zawierac dowolna ilosc smieci przed nastepna ramka
+        - a takze wiecej niz jedna gotowa ramke naraz (patrz `_query`).
+        """
+        while True:
+            start = self._buf.find(START)
+            if start == -1:
+                if len(self._buf) > 1:
+                    del self._buf[:-1]  # zachowaj ostatni bajt - moglby byc poczatkiem START
+                chunk = await self._bus.read(256)
+                if not chunk:
+                    raise FrameError("timeout - brak ramki od modulu")
+                self._buf += chunk
+                continue
+            if len(self._buf) < start + 4:
+                chunk = await self._bus.read(256)
+                if not chunk:
+                    raise FrameError("timeout - niekompletny naglowek ramki")
+                self._buf += chunk
+                continue
+            length = int.from_bytes(self._buf[start + 2 : start + 4], "big")
+            end = start + 4 + length + 1 + 2  # naglowek + payload + checksum + END
+            if len(self._buf) < end:
+                chunk = await self._bus.read(256)
+                if not chunk:
+                    raise FrameError("timeout - niekompletna ramka")
+                self._buf += chunk
+                continue
+            frame = bytes(self._buf[start:end])
+            del self._buf[:end]
+            return frame
+
+    async def _request(self, msg_id: int, body: bytes = b"") -> tuple[int, bytes]:
+        """Dla komend ustawiajacych - modul odpowiada jedna ramka ACK/NACK."""
         async with self._lock:
             await self._bus.select(self._target)
             await self._bus.write(encode_message(msg_id, body))
-            frame = await self._bus.read(response_size)
-            return decode_message(frame)
+            return decode_message(await self._read_frame())
+
+    async def _query(self, msg_id: int, body: bytes = b"") -> tuple[int, bytes]:
+        """Dla zapytan - modul czasem odsyla najpierw ACK dla samej komendy a
+        potem osobna ramke z danymi, a czasem odpowiada dana ramka bezposrednio
+        (oba warianty zaobserwowane na sprzecie) - wiec ACK jest pomijany, a
+        zwracana jest pierwsza NIE-ACK ramka."""
+        async with self._lock:
+            await self._bus.select(self._target)
+            await self._bus.write(encode_message(msg_id, body))
+            while True:
+                resp_id, resp_body = decode_message(await self._read_frame())
+                if resp_id == _NACK:
+                    raise RuntimeError(f"PX1122R NACK: {resp_body!r}")
+                if resp_id == _ACK:
+                    continue
+                return resp_id, resp_body
 
     def _check_ack(self, msg_id: int, body: bytes) -> None:
         if msg_id == _NACK:
@@ -46,12 +113,8 @@ class Px1122rConfigClient:
         if msg_id != _ACK:
             raise RuntimeError(f"nieoczekiwana odpowiedz (ID=0x{msg_id:02X}): {body!r}")
 
-    async def _configure(self, msg_id: int, sub_id: int, save_to_flash: bool = True) -> None:
-        resp_id, body = await self._request(msg_id, bytes([sub_id, int(save_to_flash)]))
-        self._check_ack(resp_id, body)
-
     async def get_output_rate(self) -> int:
-        msg_id, body = await self._request(0x10)  # AN0039: query position update rate
+        msg_id, body = await self._query(0x10)  # AN0039: query position update rate
         if msg_id != _RATE_RESPONSE:
             raise RuntimeError(f"nieoczekiwana odpowiedz (ID=0x{msg_id:02X}): {body!r}")
         return body[0]
@@ -61,29 +124,112 @@ class Px1122rConfigClient:
         msg_id, body = await self._request(0x0E, bytes([hz, int(save_to_flash)]))
         self._check_ack(msg_id, body)
 
-    async def get_baseline_m(self) -> float:
-        raise NotImplementedError  # AN0039 (0x64/0x21 query) - brak przykladu ramki odpowiedzi
+    # Baseline jako samodzielna komenda (0x64/0x21, 0x6E/0x01|0x02) dostawala jednolity
+    # NACK na sprzecie 2026-07-27 niezaleznie od formatu body - patrz get_baseline_m
+    # usuniete tego samego dnia. Znaleziono jednak w AN0028 (SkyTraq Venus 8, dokument
+    # dla innego chipsetu niz PX1122R - do potwierdzenia) realna komende laczaca tryb
+    # RTK z wymuszona dlugoscia baseline: configure_rtk_mode() nizej, pole
+    # baseline_length_m, uzywane gdy Rover ma operational_function=RTK_ROVER_FUNC_MOVING_BASE.
 
-    async def set_baseline_m(self, meters: float, save_to_flash: bool = True) -> None:
-        # AN0039: msg 0x64, sub-id 0x21, value = cm jako 16-bit big-endian (potwierdzone: 100cm/250cm)
-        cm = round(meters * 100)
-        body = bytes([0x21, int(save_to_flash)]) + cm.to_bytes(2, "big")
-        msg_id, resp_body = await self._request(0x64, body)
+    async def configure_rtk_mode(
+        self,
+        mode: int,
+        operational_function: int,
+        survey_length_s: int = 0,
+        standard_deviation_m: int = 0,
+        latitude_deg: float = 0.0,
+        longitude_deg: float = 0.0,
+        altitude_m: float = 0.0,
+        baseline_length_m: float = 0.0,
+        save_to_flash: bool = True,
+    ) -> None:
+        """SkyTraq 'Configure RTK Mode and Operational Function' (0x6A/0x06, wg AN0028
+        dla Venus 8 - nieudokumentowane dla PX1122R, wymaga potwierdzenia na sprzecie).
+        Jedna komenda ustawia jednoczesnie tryb RTK (RTK_MODE_ROVER/BASE/PRECISE_
+        KINEMATIC_BASE), funkcje operacyjna (dla Rovera: NORMAL/FLOAT/MOVING_BASE, dla
+        Base: KINEMATIC/SURVEY/STATIC) oraz - gdy Rover ma funkcje MOVING_BASE -
+        wymuszona dlugosc baseline (uzyj 0.0 jesli nieznana/plywajaca)."""
+        body = bytes([_RTK_MODE_CONFIGURE_SID, mode, operational_function])
+        body += survey_length_s.to_bytes(4, "big")
+        body += standard_deviation_m.to_bytes(4, "big")
+        body += struct.pack(">d", latitude_deg)
+        body += struct.pack(">d", longitude_deg)
+        body += struct.pack(">f", altitude_m)
+        body += struct.pack(">f", baseline_length_m)
+        body += bytes([int(save_to_flash)])
+        msg_id, resp_body = await self._request(_RTK_MODE_MSG, body)
         self._check_ack(msg_id, resp_body)
 
-    async def configure_as_base(self) -> None:
-        """AN0039: Moving Base - RTK base + RTCM 1005/1074/1084/1094/1124 @ 1Hz, zapis do flash."""
-        await self._configure(_MODE_MSG, _MODE_BASE)
-        for sub_id in (
-            _RTCM_1005_BASE_POSITION,
-            _RTCM_1074_GPS,
-            _RTCM_1084_GLONASS,
-            _RTCM_1094_GALILEO,
-            _RTCM_1124_BEIDOU,
-        ):
-            await self._configure(_RTCM_MSG, sub_id)
+    async def query_rtk_mode(self) -> tuple[int, int, float]:
+        """Zwraca (rtk_mode, operational_function, baseline_length_m) - 0x6A/0x07 query,
+        odpowiedz 0x6A/0x83."""
+        _, body = await self._query(_RTK_MODE_MSG, bytes([_RTK_MODE_QUERY_SID]))
+        if body[0] != _RTK_MODE_RESPONSE_SID:
+            raise RuntimeError(f"nieoczekiwana odpowiedz (SID=0x{body[0]:02X}): {body!r}")
+        # Uklad pol identyczny jak w tele configure_rtk_mode (bez koncowego save_to_flash),
+        # potwierdzone na sprzecie 2026-07-27: baseline_length_m na bajtach 31-34 (nie
+        # ostatnie 4B - za body jeszcze 5 nieznanych bajtow, prawdopodobnie baseline_course_deg + rezerwa).
+        (
+            _sid,
+            mode,
+            operational_function,
+            _survey_length_s,
+            _standard_deviation_m,
+            _latitude_deg,
+            _longitude_deg,
+            _altitude_m,
+            baseline_length_m,
+        ) = struct.unpack(">BBBIIddff", body[:35])
+        return mode, operational_function, baseline_length_m
 
-    async def configure_as_rover(self) -> None:
-        """AN0039: Rover - wylacza wysylanie poprawek RTCM."""
-        await self._configure(_MODE_MSG, _MODE_ROVER)
-        await self._configure(_MODE_MSG, _MODE_RTCM_OFF)
+    async def set_baudrate(self, baud: int, save_to_flash: bool = False) -> None:
+        """SkyTraq 'Configure Serial Port' (0x05) - standardowa komenda uzywana w wielu
+        modulach SkyTraq, nieudokumentowana w dostepnym AN0039 (Raw Measurement Data
+        Extension) dla tego modulu, wiec wymaga potwierdzenia na sprzecie. Po ACK modul
+        natychmiast przelacza UART na nowy baudrate - trzeba takze przelaczyc/otworzyc
+        polaczenie hosta na `baud`, inaczej kolejne odpowiedzi beda nieczytelne.
+        `save_to_flash=False` domyslnie: restart/reset zasilania przywraca poprzedni
+        baudrate, jesli cos pojdzie nie tak."""
+        if baud not in _BAUD_RATE_IDS:
+            raise ValueError(f"nieobslugiwany baudrate: {baud}")
+        body = bytes([0x00, _BAUD_RATE_IDS[baud], int(save_to_flash)])
+        msg_id, resp_body = await self._request(_SERIAL_PORT_MSG, body)
+        self._check_ack(msg_id, resp_body)
+
+    async def restart(self, mode: int = RESTART_HOT) -> None:
+        """SkyTraq 'System Restart' (0x01) - standardowa komenda z bazowego binarnego
+        protokolu SkyTraq (cala rodzina chipsetow), nieudokumentowana w dostepnym
+        AN0039 dla PX1122R - wymaga potwierdzenia na sprzecie (analogicznie do
+        set_baudrate()/configure_rtk_mode() w tym pliku).
+        RESTART_HOT: uzywa zapisanych efemeryd/almanachu/pozycji/czasu bez zmian.
+        RESTART_WARM: odrzuca efemerydy, zachowuje almanach/przyblizona pozycje/czas.
+        RESTART_COLD: pelny cold start - odrzuca efemerydy+almanach+pozycje+czas,
+        najdluzszy czas do pierwszego fixa.
+        Wysyla wylacznie bajt trybu, bez opcjonalnej podpowiedzi UTC/pozycji
+        przyspieszajacej COLD start - dokladny uklad tych dodatkowych pol nie jest
+        pewny bez zrodlowego dokumentu, do uzupelnienia jesli modul zwroci NACK
+        oczekujac dluzszego body."""
+        msg_id, resp_body = await self._request(_SYSTEM_RESTART_MSG, bytes([mode]))
+        self._check_ack(msg_id, resp_body)
+
+    async def restart_hot(self) -> None:
+        await self.restart(RESTART_HOT)
+
+    async def restart_warm(self) -> None:
+        await self.restart(RESTART_WARM)
+
+    async def restart_cold(self) -> None:
+        await self.restart(RESTART_COLD)
+
+    async def configure_as_base(self) -> None:
+        """Precisely Kinematic Mode Base (datasheet 'Advanced Moving Base') - odbiera
+        RTCM/NTRIP od hosta, przekazuje korekty do Rovera bezposrednim przewodem
+        (poza RPi). Uzywa 0x6A, patrz configure_rtk_mode()."""
+        await self.configure_rtk_mode(RTK_MODE_PRECISE_KINEMATIC_BASE, RTK_BASE_FUNC_KINEMATIC)
+
+    async def configure_as_rover(self, baseline_length_m: float) -> None:
+        """Moving Base Mode Rover (datasheet 'Advanced Moving Base') - liczy wektor
+        baseline wzgledem Base. `baseline_length_m` to znana/oczekiwana dlugosc anteny
+        do anteny, uzywana przez RTK-engine do przyspieszenia fixowania ambiguity.
+        Uzywa 0x6A, patrz configure_rtk_mode()."""
+        await self.configure_rtk_mode(RTK_MODE_ROVER, RTK_ROVER_FUNC_MOVING_BASE, baseline_length_m=baseline_length_m)

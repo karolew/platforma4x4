@@ -52,7 +52,32 @@ sudo reboot
    ip -details -statistics link show can0
    ```
 
-## 4. Python 3.13
+## 4. Interfejs UART (PX1122R)
+
+RPi3 ma tylko jeden sprzętowy UART (PL011), a domyślnie jest on podłączony do Bluetooth — GPIO14/15 dostaje wtedy słabszy mini-UART (`/dev/ttyS0`), którego nazwa/stabilność zależy od taktowania CPU. Do PX1122R (przez mux 74HC4053) potrzebny jest pełny PL011 jako `/dev/ttyAMA0`.
+
+1. Dodaj do `/boot/firmware/config.txt` (razem z sekcją CAN):
+   ```
+   enable_uart=1
+   dtoverlay=disable-bt
+   ```
+2. Wyłącz serwis obsługujący Bluetooth-UART i konsolę szeregową (inaczej coś innego zajmie port):
+   ```bash
+   sudo systemctl disable hciuart
+   sudo raspi-config nonint do_serial_cons 1   # wylacza login na porcie szeregowym
+   ```
+3. `sudo reboot`, potem sprawdź:
+   ```bash
+   ls -l /dev/ttyAMA0
+   ```
+   Jeśli nadal brak — sprawdź `dmesg | grep -i tty` i czy `dtoverlay=disable-bt` faktycznie trafiło do pliku (na niektórych obrazach to `/boot/config.txt`, nie `/boot/firmware/config.txt`).
+4. `gpiozero` (select muxa) wymaga backendu GPIO — na Raspberry Pi OS Bookworm to `lgpio`, dodawany razem z resztą zależności `navigation` w kroku 9. Do zbudowania jego wheela (kompiluje C-rozszerzenie) potrzebne są narzędzia budowania i sama biblioteka C:
+   ```bash
+   sudo apt install -y swig python3-dev build-essential liblgpio-dev
+   ```
+   Bez tego `pip install lgpio` (krok 9) wywali się na `swig: No such file` albo `cannot find -llgpio`.
+
+## 5. Python 3.13
 
 Sprawdź najpierw czy już masz 3.13+ (część obrazów/aktualizacji Raspberry Pi OS już go ma):
 
@@ -68,21 +93,21 @@ source $HOME/.local/bin/env
 uv python install 3.13
 ```
 
-## 5. Mosquitto (broker MQTT)
+## 6. Mosquitto (broker MQTT)
 
 ```bash
 sudo apt install -y mosquitto mosquitto-clients
 sudo systemctl stop mosquitto   # wystartuje docelowo jako część configu poniżej
 ```
 
-## 6. Użytkownik i katalog aplikacji
+## 7. Użytkownik i katalog aplikacji
 
 ```bash
 sudo useradd -r -m -d /opt/rover -s /usr/sbin/nologin rover
 sudo usermod -aG dialout,spi,gpio rover   # dostęp do CAN/serial/GPIO (mux select PX1122R)
 ```
 
-## 7. Wgranie kodu
+## 8. Wgranie kodu
 
 Z maszyny deweloperskiej (zamień `rover-01.local` na hostname/IP Twojego RPi):
 
@@ -107,9 +132,9 @@ sudo chown -R rover:rover /opt/rover
 rm -rf /tmp/rover-deploy
 ```
 
-## 8. Instalacja zależności
+## 9. Instalacja zależności
 
-Przełącz się na użytkownika `rover` (nie `sudo` — pliki mają należeć do `rover`, nie do `root`, bo tak uruchamiają się serwisy w kroku 11):
+Przełącz się na użytkownika `rover` (nie `sudo` — pliki mają należeć do `rover`, nie do `root`, bo tak uruchamiają się serwisy w kroku 12):
 
 ```bash
 sudo -u rover -H bash
@@ -126,20 +151,20 @@ Extra `vision` (OpenCV) dołącz tylko jeśli ten RPi faktycznie obsługuje kame
 pip install -e ".[vision]"
 ```
 
-(Jeśli zamiast systemowego `python3.13` zainstalowałeś go przez `uv` w kroku 4, użyj `uv venv --python 3.13 .venv` i `uv pip install -e "..."` zamiast powyższego — działa tak samo, tylko szybciej.)
+(Jeśli zamiast systemowego `python3.13` zainstalowałeś go przez `uv` w kroku 5, użyj `uv venv --python 3.13 .venv` i `uv pip install -e "..."` zamiast powyższego — działa tak samo, tylko szybciej.)
 
-## 9. Konfiguracja
+## 10. Konfiguracja
 
 Edytuj `/opt/rover/config/rover.yaml` (unikalny `rover_id` per robot) oraz pliki w `/opt/rover/config/services/*.yaml` — zmień `driver: mock` na docelowy driver (`stm32_can`, `rtk_gnss`, `opencv_path`, `can_collision`, `servo_can`, `rest_ws`) w miarę jak poszczególne implementacje są gotowe. Dopóki dana implementacja ma `raise NotImplementedError`, zostaw tam `mock`.
 
-## 10. Broker MQTT — config
+## 11. Broker MQTT — config
 
 ```bash
 sudo cp /opt/rover/deploy/mosquitto/mosquitto.conf /etc/mosquitto/conf.d/rover.conf
 sudo systemctl enable --now mosquitto
 ```
 
-## 11. Systemd — serwisy ROVER
+## 12. Systemd — serwisy ROVER
 
 ```bash
 sudo cp /opt/rover/deploy/systemd/rover-*.service /etc/systemd/system/
@@ -150,7 +175,7 @@ sudo systemctl enable --now rover-motion rover-navigation rover-vision \
 
 Uwaga: unity w repo wskazują na `/opt/rover/.venv/bin/python` — jeśli zmieniasz ścieżkę instalacji, popraw `ExecStart` w plikach `.service` przed kopiowaniem.
 
-## 12. Weryfikacja
+## 13. Weryfikacja
 
 ```bash
 systemctl status rover-decision
@@ -162,7 +187,7 @@ Powyższe powinno pokazywać przepływające wiadomości na topikach `rover/<rov
 
 ## Aktualizacja kodu (redeploy)
 
-Do iteracji nad kodem służy `deploy/sync-rover.sh` — synchronizuje całą zawartość `rover/` (`src/`, `pyproject.toml`, `deploy/`, ...) **poza** `config/` (zostaje nietknięty na RPi, chyba że podasz nowy `rover_id` — zawiera dane per-rover jak poświadczenia NTRIP, których nie ma w repo) i `.venv/` (nigdy nie jest częścią payloadu, więc `--delete` by je skasowało). Jeśli `pyproject.toml` się zmienił, skrypt wypisze przypomnienie o ręcznym `pip install -e ...` w venv (sync nie robi tego automatycznie). Na końcu restartuje wszystkie serwisy. Skrypt jest już na RPi po kroku 7 (część `deploy/`), trzeba go tylko raz uczynić wykonywalnym:
+Do iteracji nad kodem służy `deploy/sync-rover.sh` — synchronizuje całą zawartość `rover/` (`src/`, `pyproject.toml`, `deploy/`, ...) **poza** `config/` (zostaje nietknięty na RPi, chyba że podasz nowy `rover_id` — zawiera dane per-rover jak poświadczenia NTRIP, których nie ma w repo) i `.venv/` (nigdy nie jest częścią payloadu, więc `--delete` by je skasowało). Jeśli `pyproject.toml` się zmienił, skrypt wypisze przypomnienie o ręcznym `pip install -e ...` w venv (sync nie robi tego automatycznie). Na końcu restartuje wszystkie serwisy. Skrypt jest już na RPi po kroku 8 (część `deploy/`), trzeba go tylko raz uczynić wykonywalnym:
 
 ```bash
 chmod +x /opt/rover/deploy/sync-rover.sh
@@ -185,11 +210,13 @@ bash /opt/rover/deploy/sync-rover.sh            # bez zmiany rover_id
 bash /opt/rover/deploy/sync-rover.sh robal-002   # ze zmianą rover_id
 ```
 
-Skrypt sam usuwa `/tmp/rover-deploy` na końcu, więc kolejny `scp -r` zawsze trafia na nieistniejący katalog docelowy (bezpieczne pod kątem opisanej wyżej pułapki `scp -r`). `pyproject.toml` i `deploy/*` trafiają teraz na RPi razem z resztą, ale **nie są automatycznie stosowane**: zmiana zależności wymaga ręcznego `pip install -e ...` w venv (skrypt o tym przypomni), a zmiana systemd unitów (`deploy/systemd/*.service`) czy sieciowych (`deploy/network/*.network`) wymaga ręcznego `cp` do `/etc/systemd/...` + `daemon-reload`/`enable` (patrz kroki 8, 11 i 3.5) — samo skopiowanie do `/opt/rover/deploy/` nic w działającym systemie nie zmienia.
+Skrypt sam usuwa `/tmp/rover-deploy` na końcu, więc kolejny `scp -r` zawsze trafia na nieistniejący katalog docelowy (bezpieczne pod kątem opisanej wyżej pułapki `scp -r`). `pyproject.toml` i `deploy/*` trafiają teraz na RPi razem z resztą, ale **nie są automatycznie stosowane**: zmiana zależności wymaga ręcznego `pip install -e ...` w venv (skrypt o tym przypomni), a zmiana systemd unitów (`deploy/systemd/*.service`) czy sieciowych (`deploy/network/*.network`) wymaga ręcznego `cp` do `/etc/systemd/...` + `daemon-reload`/`enable` (patrz kroki 9, 12 i 3.5) — samo skopiowanie do `/opt/rover/deploy/` nic w działającym systemie nie zmienia.
 
 ## Troubleshooting
 
 - **`can0` nie istnieje** → sprawdź `dmesg | grep -i mcp2515`, złe okablowanie SPI lub zły `oscillator` w overlay.
+- **`/dev/ttyAMA0` nie istnieje** → brak `dtoverlay=disable-bt`/`enable_uart=1` w `config.txt` albo `hciuart` wciąż aktywny (patrz krok 4) — bez tego PL011 zostaje przy Bluetooth, a GPIO14/15 dostaje niestabilny mini-UART.
+- **`gpiozero.exc.BadPinFactory: Unable to load any default pin factory`** → brak backendu GPIO (`lgpio`) albo `rover` nie jest w grupie `gpio` (krok 7). Zainstaluj `lgpio` w venv (krok 4 opisuje zależności systemowe potrzebne do zbudowania jego wheela: `swig`, `python3-dev`, `liblgpio-dev`).
 - **Serwis restartuje w pętli** → `journalctl -u rover-<nazwa> -n 50 --no-pager`, zwykle brak uprawnień do `/dev/spidev*` lub `can0` (grupa `rover` bez `dialout`/`spi`), albo błąd w `config/services/*.yaml`.
 - **Serwisy nie widzą się nawzajem** → sprawdź czy `mosquitto` działa (`systemctl status mosquitto`) i czy `mqtt.host`/`port` w `config/rover.yaml` są poprawne.
 - **Serwis mock crash-looping z `TypeError: Mock...() takes no arguments`** → `driver_args` z configu (przeznaczone dla drivera docelowego) trafiają też do drivera `mock`; wszystkie klasy `Mock*` mają `def __init__(self, **_kwargs) -> None: ...` właśnie po to, żeby to ignorować — jeśli błąd wraca, sprawdź czy deploy faktycznie nadpisał plik (patrz punkt niżej o `scp -r`).

@@ -1,5 +1,5 @@
 """Wspolny UART0 do obu PX1122R, przelaczany 74HC4053 (A/B/C zwarte na 1 pin
-select GPIO17/pin11: 0=Base, 1=Rover). RPi pin 8 (TXD) -> wejscie Y, pin 10
+select GPIO17/pin11: 0=Rover, 1=Base). RPi pin 8 (TXD) -> wejscie Y, pin 10
 (RXD) -> wejscie Z.
 
 Normalna praca (RtkGnssProvider) trzyma select na Base na stale - przelaczanie na
@@ -35,9 +35,9 @@ class Px1122rBus:
 
     def select_sync(self, target: Target) -> None:
         if target == "base":
-            self._select_pin.off()
-        else:
             self._select_pin.on()
+        else:
+            self._select_pin.off()
 
     async def select(self, target: Target) -> None:
         self.select_sync(target)

@@ -13,12 +13,9 @@ from __future__ import annotations
 import asyncio
 import sys
 
+from rover.common.config import load_service_config
 from rover.services.navigation.gnss.px1122r_bus import Px1122rBus, Target
 from rover.services.navigation.gnss.px1122r_config import Px1122rConfigClient
-
-UART_PORT = "/dev/ttyAMA0"
-BAUDRATE = 460800
-MUX_SELECT_GPIO = 17
 
 
 async def main() -> None:
@@ -29,7 +26,12 @@ async def main() -> None:
     target: Target = sys.argv[1]  # type: ignore[assignment]
     new_hz = int(sys.argv[2]) if len(sys.argv) > 2 else None
 
-    bus = Px1122rBus(UART_PORT, BAUDRATE, MUX_SELECT_GPIO)
+    args = load_service_config("navigation").driver_args
+    bus = Px1122rBus(
+        args.get("uart_port", "/dev/ttyAMA0"),
+        args.get("baudrate", 115200),
+        args.get("mux_select_gpio", 17),
+    )
     await bus.start()
     client = Px1122rConfigClient(bus, target)
     try:

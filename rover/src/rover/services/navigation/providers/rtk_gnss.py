@@ -26,7 +26,7 @@ class RtkGnssProvider(NavigationProvider):
     def __init__(
         self,
         uart_port: str = "/dev/ttyAMA0",
-        baudrate: int = 460800,
+        baudrate: int = 115200,
         mux_select_gpio: int = 17,
         ntrip: dict[str, object] | None = None,
         gga_interval_s: float = 300.0,
@@ -92,11 +92,11 @@ class RtkGnssProvider(NavigationProvider):
         self._parser.parse(text)
         self._pose = Pose(
             timestamp=time.time(),
-            lat=self._parser.lat,
-            lon=self._parser.lon,
-            heading_deg=self._parser.heading,
-            speed_kmh=self._parser.speed,
-            fix_type=self._parser.quality,
+            lat=self._parser.lat or 0.0,
+            lon=self._parser.lon or 0.0,
+            heading_deg=self._parser.heading or 0.0,
+            speed_kmh=self._parser.speed or 0.0,
+            fix_type=self._parser.quality or "none",
         )
 
         if _is_gga(text):
