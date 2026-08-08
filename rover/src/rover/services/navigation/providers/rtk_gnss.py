@@ -94,7 +94,7 @@ class RtkGnssProvider(NavigationProvider):
             timestamp=time.time(),
             lat=self._parser.lat or 0.0,
             lon=self._parser.lon or 0.0,
-            heading_deg=self._parser.heading or 0.0,
+            heading_deg=self._parser.baseline_course or self._parser.heading or 0.0,
             speed_kmh=self._parser.speed or 0.0,
             fix_type=self._parser.quality or "none",
         )
