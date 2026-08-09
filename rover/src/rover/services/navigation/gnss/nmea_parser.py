@@ -125,9 +125,20 @@ class NMEAParser:
         self.east_pob = None
         self.north_pob = None
         self.up_pob = None
-        self.baseline_length = None     # baseline_m
-        self.baseline_course = None
+        self.baseline_length = None     # baseline_m, z PSTI,035 (Base<->Rover, jedyny fizyczny link w tym projekcie)
+        self.baseline_course = None     # z PSTI,035 - patrz baseline_length
+        self.baseline_mode = None       # RTK ambiguity mode PSTI,035: F=Float, R=Fix - patrz baseline_length
         self.nav_status = None
+
+        # PSTI,032 (link CORS<->Base w Advanced Moving Base) - w tym projekcie nieuzywany (brak fizycznego
+        # Receiver A, NTRIP wpiety bezposrednio w Base), dane bez sensu fizycznego (baseline_length rosnie
+        # bez ograniczen). Trzymane w OSOBNYCH atrybutach, zeby nie nadpisywaly prawdziwych danych z PSTI,035.
+        self.east_pob_032 = None
+        self.north_pob_032 = None
+        self.up_pob_032 = None
+        self.baseline_length_032 = None
+        self.baseline_course_032 = None
+        self.mode_032 = None
 
     def parse(self, raw_sentence: str) -> None:
         try:
@@ -253,18 +264,6 @@ class NMEAParser:
                 self.date = f"{day}{month}{year[2:]}"
             elif self.units == 2:
                 self.date = f"{year}-{month}-{day}"
-
-    def get_elevation(self, field: str) -> int:
-        if field and int(field) in range(0, 90 + 1):
-            return int(field)
-
-    def get_azimuth(self, field: str) -> int:
-        if field and int(field) in range(0, 359 + 1):
-            return int(field)
-
-    def get_snr(self, field: str) -> int:
-        if field and int(field) in range(0, 99 + 1):
-            return int(field)
 
     def get_mode(self, field: str) -> None:
         if field and field in self.MODES:
@@ -430,8 +429,9 @@ class NMEAParser:
         """
         self.get_mode(self.fields[9])
         if self.fields[9] != "N":
-            self.get_speed(self.fields[1])
-            self.get_course(self.fields[5])
+            # fields[1]=course (True), fields[5]=speed w wezlach - wg datasheetu PX1122R str.21
+            self.get_course(self.fields[1])
+            self.get_speed(self.fields[5])
 
     def zda(self) -> None:
         """
@@ -452,9 +452,13 @@ class NMEAParser:
         """
         STI 005 Time Stamp Output
         STI 030 Recommended Minimum 3D GNSS Data
-        STI 032 RTK Baseline Data
+        STI 032 RTK Baseline Data - link CORS(A)<->Base(B) w Advanced Moving Base; NIEUZYWANY w tym
+        projekcie (2 odbiorniki, NTRIP wpiety bezposrednio w Base zamiast fizycznego Receiver A) - dane
+        bez sensu fizycznego, potwierdzone na sprzecie (baseline_length rosnie bez ograniczen, >137m).
+        Trzymane w oddzielnych *_032 atrybutach, celowo NIE dzieli pol z PSTI,035 ponizej.
         TODO STI 033 RTK RAW Measurement Monitoring Data
-        STI 035 RTK Baseline Data of Rover Moving Base Receiver
+        STI 035 RTK Baseline Data of Rover Moving Base Receiver - link Base(B)<->Rover(C), jedyny
+        fizycznie istniejacy w tym projekcie - zrodlo baseline_length/baseline_course/heading_deg.
         """
         if "005" in self.fields[1]:
             self.get_time(self.fields[2])
@@ -474,16 +478,31 @@ class NMEAParser:
                 self.get_rtk_age(self.fields[14])
                 self.get_rtk_ratio(self.fields[15])
 
-        elif "032" in self.fields[1] or "035" in self.fields[1]:
+        elif "032" in self.fields[1]:
+            if self.fields[4] == self.VALID:
+                if self.fields[5] and self.fields[5] in self.MODES:
+                    self.mode_032 = self.MODES[self.fields[5]]
+                self.east_pob_032 = float(self.fields[6]) if self.fields[6] else None
+                self.north_pob_032 = float(self.fields[7]) if self.fields[7] else None
+                self.up_pob_032 = float(self.fields[8]) if self.fields[8] else None
+                self.baseline_length_032 = float(self.fields[9]) if self.fields[9] else None
+                self.baseline_course_032 = float(self.fields[10]) if self.fields[10] else None
+
+        elif "035" in self.fields[1]:
             if self.fields[4] == self.VALID:
                 self.get_time(self.fields[2])
                 self.get_date(self.fields[3])
-                self.get_mode(self.fields[5])
+                if self.fields[5] and self.fields[5] in self.MODES:
+                    self.baseline_mode = self.MODES[self.fields[5]]
                 self.get_east_pob(self.fields[6])
                 self.get_north_pob(self.fields[7])
                 self.get_up_pob(self.fields[8])
                 self.get_baseline_length(self.fields[9])
                 self.get_baseline_course(self.fields[10])
+            else:
+                # baseline_course NIE jest czyszczony - zostaje przy ostatniej znanej
+                # wartosci (stale), wiec bez tego printu zamrozenie heading jest ciche.
+                print("PSTI,035: baseline invalid (V) - heading_deg zamrozony na ostatniej wartosci")
 
         elif "033" in self.fields[1]:
             print("STI 033 not implemented")

@@ -18,8 +18,16 @@ from rover.services.navigation.gnss.px1122r_bus import Px1122rBus
 from rover.services.navigation.interface import NavigationProvider
 
 
+_HEADING_RAW_LOG_PATH = "/tmp/heading_raw.log"
+
+
 def _is_gga(sentence: str) -> bool:
     return sentence.startswith("$") and sentence[1:].split(",", 1)[0].endswith("GGA")
+
+
+def _is_heading_sentence(sentence: str) -> bool:
+    """PSTI,032/,035 (baseline_course) i THS (heading) - zrodla Pose.heading_deg."""
+    return "PSTI,032" in sentence or "PSTI,035" in sentence or "THS" in sentence
 
 
 class RtkGnssProvider(NavigationProvider):
@@ -42,7 +50,7 @@ class RtkGnssProvider(NavigationProvider):
             user=str(ntrip.get("user", "")),
             password=str(ntrip.get("password", "")),
         )
-        self._parser = NMEAParser()
+        self._parser = NMEAParser(units=2)  # units=2: get_speed() konwertuje wezly->km/h (Pose.speed_kmh); domyslne units=1 zostawia surowe wezly
         self._pose = Pose(timestamp=0.0, lat=0.0, lon=0.0, heading_deg=0.0, speed_kmh=0.0, fix_type="none")
         self._tasks: list[asyncio.Task[None]] = []
 
@@ -88,6 +96,11 @@ class RtkGnssProvider(NavigationProvider):
         text = line.decode("ascii", errors="ignore")
         if not text.startswith("$"):
             return
+
+        if _is_heading_sentence(text):
+            # raw dane PRZED parserem - do korelacji z parsed heading_deg przy debugowaniu
+            with open(_HEADING_RAW_LOG_PATH, "a") as f:
+                f.write(f"{time.time()} {text}\n")
 
         self._parser.parse(text)
         self._pose = Pose(
