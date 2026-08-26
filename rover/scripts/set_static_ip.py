@@ -12,7 +12,7 @@ import subprocess
 import sys
 
 STATIC_LAST_OCTET = 102
-LOG_PATH = "/tmp/set_static_ip.log"
+LOG_PATH = f"/tmp/set_static_ip.{os.geteuid()}.log"
 
 
 def survive_disconnect() -> None:
@@ -27,8 +27,11 @@ def survive_disconnect() -> None:
 
 
 def log(msg: str, err: bool = False) -> None:
-    with open(LOG_PATH, "a") as f:
-        f.write(msg + "\n")
+    try:
+        with open(LOG_PATH, "a") as f:
+            f.write(msg + "\n")
+    except OSError:
+        pass  # brak dostepu do pliku logu (np. inny wlasciciel po sudo) - nie przerywaj skryptu
     try:
         print(msg, file=sys.stderr if err else sys.stdout, flush=True)
     except OSError:

@@ -41,6 +41,34 @@ RTK_BASE_FUNC_KINEMATIC = 0
 RTK_BASE_FUNC_SURVEY = 1
 RTK_BASE_FUNC_STATIC = 2
 
+# Sub-komendy wewnatrz 0x6A (body[0]) do konfiguracji baudrate WEWNETRZNYCH portow
+# szeregowych miedzy dwoma modulami PX1122R (nie mylic z _SERIAL_PORT_MSG=0x05, ktore
+# ustawia UART hosta). Potwierdzone bajt-w-bajt w komendy_z_gnss_viewer.txt (RTK 5/6),
+# query SID dla base-serial potwierdzone (RTK 3); query SID dla slave-serial
+# WYWNIOSKOWANY z konwencji "query = configure_sid + 1" (potwierdzonej niezaleznie na
+# parach 0x06/0x07 i 0x13/0x14) - oryginalna komenda RTK 2 w pliku byla uszkodzona
+# (brak `\x` przed hex w zrzucie), wiec do potwierdzenia na sprzecie.
+_SLAVE_SERIAL_BAUD_SID = 0x0C
+_SLAVE_SERIAL_BAUD_QUERY_SID = 0x0D  # niepotwierdzone na sprzecie, patrz wyzej
+_BASE_SERIAL_BAUD_SID = 0x13
+_BASE_SERIAL_BAUD_QUERY_SID = 0x14
+
+# Standardowe komendy SkyTraq (top-level msg_id, inna przestrzen niz sub-SID w 0x6A
+# powyzej - kolizja numeryczna 0x0C jest przypadkowa i nieszkodliwa). Potwierdzone
+# bajt-w-bajt w komendy_z_gnss_viewer.txt (OGOLNE 3/6).
+_POWER_MODE_QUERY_MSG = 0x15
+_POWER_MODE_CONFIGURE_MSG = 0x0C
+POWER_MODE_NORMAL = 0
+POWER_MODE_SAVE = 1
+
+# OGOLNE 1 w komendy_z_gnss_viewer.txt: GNSS Viewer wysyla te dwie komendy razem dla
+# ekranu "SW info". Drugi bajt body w obu przypadkach zaobserwowany, znaczenie
+# nieustalone (prawdopodobnie typ/wersja) - odtwarzane 1:1, bez interpretacji.
+_SW_VERSION_MSG = 0x02
+_SW_VERSION_BODY = bytes([0x01])
+_SW_CRC_MSG = 0x64
+_SW_CRC_BODY = bytes([0x7D])
+
 
 class Px1122rConfigClient:
     def __init__(self, bus: Px1122rBus, target: Target) -> None:
@@ -135,8 +163,8 @@ class Px1122rConfigClient:
         self,
         mode: int,
         operational_function: int,
-        survey_length_s: int = 0,
-        standard_deviation_m: int = 0,
+        survey_length_s: int = 60,
+        standard_deviation_m: int = 30,
         latitude_deg: float = 0.0,
         longitude_deg: float = 0.0,
         altitude_m: float = 0.0,
@@ -148,7 +176,14 @@ class Px1122rConfigClient:
         Jedna komenda ustawia jednoczesnie tryb RTK (RTK_MODE_ROVER/BASE/PRECISE_
         KINEMATIC_BASE), funkcje operacyjna (dla Rovera: NORMAL/FLOAT/MOVING_BASE, dla
         Base: KINEMATIC/SURVEY/STATIC) oraz - gdy Rover ma funkcje MOVING_BASE -
-        wymuszona dlugosc baseline (uzyj 0.0 jesli nieznana/plywajaca)."""
+        wymuszona dlugosc baseline (uzyj 0.0 jesli nieznana/plywajaca).
+
+        survey_length_s=60/standard_deviation_m=30 domyslnie (zamiast 0/0 sprzed
+        2026-08-26) - dokladnie to wysyla GNSS Viewer dla KAZDEGO trybu (advanced-base
+        I rover), potwierdzone bajt-w-bajt w komendy_z_gnss_viewer.txt. System dziala
+        (heading OK) skonfigurowany przez GNSS Viewer, nie dzialal przez ten klient ze
+        starymi domyslnymi 0/0 - te pola byly glownym podejrzanym, do potwierdzenia
+        na sprzecie czy realnie to byla przyczyna."""
         body = bytes([_RTK_MODE_CONFIGURE_SID, mode, operational_function])
         body += survey_length_s.to_bytes(4, "big")
         body += standard_deviation_m.to_bytes(4, "big")
@@ -221,15 +256,76 @@ class Px1122rConfigClient:
     async def restart_cold(self) -> None:
         await self.restart(RESTART_COLD)
 
-    async def configure_as_base(self) -> None:
+    async def configure_as_base(self, save_to_flash: bool = True) -> None:
         """Precisely Kinematic Mode Base (datasheet 'Advanced Moving Base') - odbiera
         RTCM/NTRIP od hosta, przekazuje korekty do Rovera bezposrednim przewodem
-        (poza RPi). Uzywa 0x6A, patrz configure_rtk_mode()."""
-        await self.configure_rtk_mode(RTK_MODE_PRECISE_KINEMATIC_BASE, RTK_BASE_FUNC_KINEMATIC)
+        (poza RPi). Uzywa 0x6A, patrz configure_rtk_mode() (w tym jego domyslne
+        survey_length_s/standard_deviation_m, dopasowane do GNSS Viewer)."""
+        await self.configure_rtk_mode(RTK_MODE_PRECISE_KINEMATIC_BASE, RTK_BASE_FUNC_KINEMATIC, save_to_flash=save_to_flash)
 
-    async def configure_as_rover(self, baseline_length_m: float) -> None:
+    async def configure_as_rover(self, baseline_length_m: float, save_to_flash: bool = True) -> None:
         """Moving Base Mode Rover (datasheet 'Advanced Moving Base') - liczy wektor
         baseline wzgledem Base. `baseline_length_m` to znana/oczekiwana dlugosc anteny
         do anteny, uzywana przez RTK-engine do przyspieszenia fixowania ambiguity.
-        Uzywa 0x6A, patrz configure_rtk_mode()."""
-        await self.configure_rtk_mode(RTK_MODE_ROVER, RTK_ROVER_FUNC_MOVING_BASE, baseline_length_m=baseline_length_m)
+        Uzywa 0x6A, patrz configure_rtk_mode() (w tym jego domyslne survey_length_s/
+        standard_deviation_m, dopasowane do GNSS Viewer - wysylane nawet dla Rovera,
+        gdzie formalnie nie maja znaczenia)."""
+        await self.configure_rtk_mode(
+            RTK_MODE_ROVER, RTK_ROVER_FUNC_MOVING_BASE, baseline_length_m=baseline_length_m, save_to_flash=save_to_flash
+        )
+
+    async def get_slave_serial_baud(self) -> bytes:
+        """Query 'RTK slave serial port baud rate' (0x6A/0x0D, SID wywnioskowany - patrz
+        komentarz przy _SLAVE_SERIAL_BAUD_QUERY_SID). Zwraca surowe body odpowiedzi -
+        uklad pol niepotwierdzony na sprzecie (plik zawiera tylko komendy wychodzace)."""
+        _, body = await self._query(_RTK_MODE_MSG, bytes([_SLAVE_SERIAL_BAUD_QUERY_SID]))
+        return body
+
+    async def get_base_serial_baud(self) -> bytes:
+        """Query 'RTK precisely kinematic base serial port baud rate' (0x6A/0x14) -
+        SID potwierdzony w komendy_z_gnss_viewer.txt (RTK 3). Zwraca surowe body
+        odpowiedzi - uklad pol niepotwierdzony na sprzecie."""
+        _, body = await self._query(_RTK_MODE_MSG, bytes([_BASE_SERIAL_BAUD_QUERY_SID]))
+        return body
+
+    async def set_slave_serial_baud(self, baud: int, save_to_flash: bool = True) -> None:
+        """Configure 'RTK slave serial port baud rate' (0x6A/0x0C) - potwierdzone
+        bajt-w-bajt w komendy_z_gnss_viewer.txt (RTK 5). To port MIEDZY dwoma modulami
+        PX1122R, nie UART hosta (patrz set_baudrate())."""
+        if baud not in _BAUD_RATE_IDS:
+            raise ValueError(f"nieobslugiwany baudrate: {baud}")
+        body = bytes([_SLAVE_SERIAL_BAUD_SID, _BAUD_RATE_IDS[baud], int(save_to_flash)])
+        msg_id, resp_body = await self._request(_RTK_MODE_MSG, body)
+        self._check_ack(msg_id, resp_body)
+
+    async def set_base_serial_baud(self, baud: int, save_to_flash: bool = True) -> None:
+        """Configure 'RTK precisely kinematic base serial port baud rate' (0x6A/0x13) -
+        potwierdzone bajt-w-bajt w komendy_z_gnss_viewer.txt (RTK 6)."""
+        if baud not in _BAUD_RATE_IDS:
+            raise ValueError(f"nieobslugiwany baudrate: {baud}")
+        body = bytes([_BASE_SERIAL_BAUD_SID, _BAUD_RATE_IDS[baud], int(save_to_flash)])
+        msg_id, resp_body = await self._request(_RTK_MODE_MSG, body)
+        self._check_ack(msg_id, resp_body)
+
+    async def get_power_mode(self) -> bytes:
+        """Query power mode (0x15, brak body) - potwierdzone w komendy_z_gnss_viewer.txt
+        (OGOLNE 3). Zwraca surowe body odpowiedzi - uklad pol niepotwierdzony na
+        sprzecie."""
+        _, body = await self._query(_POWER_MODE_QUERY_MSG)
+        return body
+
+    async def set_power_mode(self, mode: int, save_to_flash: bool = True) -> None:
+        """Configure power mode (0x0C top-level, body=[mode, save]) - potwierdzone
+        bajt-w-bajt w komendy_z_gnss_viewer.txt (OGOLNE 6). Uzyj POWER_MODE_NORMAL/
+        POWER_MODE_SAVE."""
+        msg_id, resp_body = await self._request(_POWER_MODE_CONFIGURE_MSG, bytes([mode, int(save_to_flash)]))
+        self._check_ack(msg_id, resp_body)
+
+    async def get_sw(self) -> tuple[bytes, bytes]:
+        """Odtwarza 1:1 dwie komendy wysylane przez GNSS Viewer dla ekranu 'SW info'
+        (komendy_z_gnss_viewer.txt OGOLNE 1): 0x02 (Query Software Version, standardowa
+        SkyTraq) i 0x64 (prawdopodobnie Query Software CRC). Zwraca surowe body obu
+        odpowiedzi bez interpretacji - znaczenie parametrow/odpowiedzi nieustalone."""
+        _, version_body = await self._query(_SW_VERSION_MSG, _SW_VERSION_BODY)
+        _, crc_body = await self._query(_SW_CRC_MSG, _SW_CRC_BODY)
+        return version_body, crc_body

@@ -53,6 +53,7 @@ class RtkGnssProvider(NavigationProvider):
         self._parser = NMEAParser(units=2)  # units=2: get_speed() konwertuje wezly->km/h (Pose.speed_kmh); domyslne units=1 zostawia surowe wezly
         self._pose = Pose(timestamp=0.0, lat=0.0, lon=0.0, heading_deg=0.0, speed_kmh=0.0, fix_type="none")
         self._tasks: list[asyncio.Task[None]] = []
+        self._heading_log_queue: asyncio.Queue[str] = asyncio.Queue()
 
     async def start(self) -> None:
         await self._bus.start()
@@ -60,6 +61,7 @@ class RtkGnssProvider(NavigationProvider):
         self._tasks = [
             asyncio.create_task(self._rtcm_forward_loop()),
             asyncio.create_task(self._nmea_read_loop()),
+            asyncio.create_task(self._heading_log_writer_loop()),
         ]
 
     async def stop(self) -> None:
@@ -73,6 +75,13 @@ class RtkGnssProvider(NavigationProvider):
             if task.done():
                 task.result()  # propaguje wyjatek z tla (np. NotImplementedError z parsera)
         return self._pose
+
+    async def _heading_log_writer_loop(self) -> None:
+        with open(_HEADING_RAW_LOG_PATH, "a") as f:
+            while True:
+                line = await self._heading_log_queue.get()
+                f.write(line)
+                f.flush()
 
     async def _rtcm_forward_loop(self) -> None:
         while True:
@@ -97,11 +106,6 @@ class RtkGnssProvider(NavigationProvider):
         if not text.startswith("$"):
             return
 
-        if _is_heading_sentence(text):
-            # raw dane PRZED parserem - do korelacji z parsed heading_deg przy debugowaniu
-            with open(_HEADING_RAW_LOG_PATH, "a") as f:
-                f.write(f"{time.time()} {text}\n")
-
         self._parser.parse(text)
         self._pose = Pose(
             timestamp=time.time(),
@@ -111,6 +115,19 @@ class RtkGnssProvider(NavigationProvider):
             speed_kmh=self._parser.speed or 0.0,
             fix_type=self._parser.quality or "none",
         )
+
+        if _is_heading_sentence(text):
+            # raw + sparsowane dane PO parserze - do korelacji przy debugowaniu (samo raw
+            # PSTI,032 nie mowi nic o tym co faktycznie zasila Pose.heading_deg - patrz
+            # baseline_course/heading nizej). Zapis na dysk idzie przez kolejke do osobnego
+            # taska (_heading_log_writer_loop), zeby blokujace I/O nie stalo petli odczytu
+            # UART (przy 460800 baud grozilo to overrunem/gubieniem bajtow - patrz
+            # sklejone/uszkodzone linie w starych logach).
+            self._heading_log_queue.put_nowait(
+                f"{time.time()} {text} | baseline_course_035={self._parser.baseline_course} "
+                f"heading_ths={self._parser.heading} baseline_mode_035={self._parser.baseline_mode} "
+                f"mode_032={self._parser.mode_032} pose_heading_deg={self._pose.heading_deg}\n"
+            )
 
         if _is_gga(text):
             now = time.time()
