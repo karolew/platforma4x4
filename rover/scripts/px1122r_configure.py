@@ -1,7 +1,4 @@
-"""Uniwersalny skrypt konfiguracyjny PX1122R - zastepuje px1122r_rate_test.py,
-px1122r_baudrate_test.py i px1122r_restart_test.py (usuniete, w pelni tu zawarte) oraz
-laczy je z komendami przechwyconymi z GNSS Viewer (patrz D:/gnss/
-GNSS_Viewer-CustomerRelease/advanced_movng_base/komendy_z_gnss_viewer.txt) w jeden CLI.
+"""Uniwersalny skrypt konfiguracyjny PX1122R.
 
 px1122r_rtk_mode_test.py NIE jest tu zastapiony i nadal istnieje osobno - obsluguje
 kombinacje trybu/funkcji RTK spoza zakresu ponizszego (`rover normal|float`,
@@ -26,8 +23,6 @@ Uzycie (na RPi, w .venv z extras 'navigation'):
     python px1122r_configure.py base|rover set update-rate=2 [--save]
     python px1122r_configure.py base|rover get serial detect
 
-`baund=`/`banud=` sa akceptowane jako aliasy `baud=` (literowki z tresci zadania).
-
 `--save` ma znaczenie TYLKO dla `set serial` i `set update-rate` (domyslnie
 save_to_flash=False, jak w usunietych px1122r_baudrate_test.py/px1122r_rate_test.py -
 te komendy nie sa czescia "Advanced Moving Base" configu i bezpieczniej nie pisac ich
@@ -36,21 +31,6 @@ base-serial, power-mode) replikuja 1:1 komendy z GNSS Viewer, ktory wg naglowka
 komendy_z_gnss_viewer.txt zawsze zapisuje do SRAM+FLASH - wiec dla nich save_to_flash
 jest zawsze True, `--save` nie ma tam znaczenia. `get serial detect` nie dotyczy
 save_to_flash (tylko odczyt).
-
-WAZNE ZNALEZISKO (2026-08-26): GNSS Viewer wysyla dla 'advanced-base'/'rover'
-survey_length_s=60, standard_deviation_m=30 (RTK 7.1/7.2 w komendy_z_gnss_viewer.txt) -
-zamiast dawnych domyslnych 0/0. To byla najbardziej prawdopodobna przyczyna dzialajacego
-headingu przez GNSS Viewer i niedzialajacego po tej samej konfiguracji przez RPi.
-Poprawione u zrodla: `Px1122rConfigClient.configure_rtk_mode()` w px1122r_config.py ma
-teraz domyslnie 60/30 (jeden punkt prawdy - dziedziczy to takze px1122r_rtk_mode_test.py
-bez zadnych zmian w tamtym pliku).
-
-Query SID dla 'rtk slave-serial' jest WYWNIOSKOWANY (konwencja query=configure_sid+1,
-potwierdzona niezaleznie na 2 innych parach komend), nie 1:1 potwierdzony na sprzecie -
-patrz komentarz w px1122r_config.py przy _SLAVE_SERIAL_BAUD_QUERY_SID. Odpowiedzi na
-`get rtk slave-serial`/`get rtk base-serial`/`get power-mode`/`get sw` sa drukowane jako
-surowy hex - uklad pol tych odpowiedzi nie jest potwierdzony (komendy_z_gnss_viewer.txt
-zawiera tylko komendy WYCHODZACE z GNSS Viewer, nie przechwycone odpowiedzi modulu).
 """
 from __future__ import annotations
 
@@ -70,7 +50,6 @@ from rover.services.navigation.gnss.px1122r_config import (
     Px1122rConfigClient,
 )
 
-_BAUD_KEYS = ("baud", "baund", "banud")
 _RESET_MODES = {"hot": RESTART_HOT, "warm": RESTART_WARM, "cold": RESTART_COLD, "test": RESTART_TEST}
 _POWER_MODES = {"normal": POWER_MODE_NORMAL, "power-save": POWER_MODE_SAVE}
 _DETECT_QUERY_TIMEOUT_S = 2.0  # przy zlym baudrate _read_frame() moze dlugo nie znalezc START w szumie
@@ -99,10 +78,9 @@ def _parse_tokens(tokens: list[str]) -> tuple[list[str], dict[str, str]]:
 
 
 def _baud_value(kv: dict[str, str]) -> int:
-    for key in _BAUD_KEYS:
-        if key in kv:
-            return int(kv[key])
-    raise SystemExit("brak baud=<wartosc> (albo banud=/baund=)")
+    if "baud" in kv:
+        return int(kv["baud"])
+    raise SystemExit("brak baud=<wartosc>")
 
 
 async def _dispatch(
