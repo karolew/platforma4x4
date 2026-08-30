@@ -45,6 +45,14 @@ def _heading_deg(state: NavigationState, configured_baseline_m: float) -> Option
     return state.heading_deg
 
 
+def _elevation_deg(state: NavigationState) -> Optional[float]:
+    """Kat elewacji baseline PSTI,035, tylko gdy ta baseline ma RTK Fix (mode='R') -
+    przy Float wektor E/N/U (a wiec i elewacja) jest zbyt niestabilny, by mu ufac."""
+    if state.baseline_mode_035 != "R":
+        return None
+    return state.baseline_elevation_deg_035
+
+
 class RtkGnssProvider(NavigationProvider):
     def __init__(
         self,
@@ -69,7 +77,9 @@ class RtkGnssProvider(NavigationProvider):
         )
         # unit_format="iso8601": speed w km/h (Pose.speed_kmh); coord_format="decimal_degrees": lat/lon jako stopnie dziesietne
         self._parser = NMEAParser(unit_format="iso8601", coord_format="decimal_degrees")
-        self._pose = Pose(timestamp=0.0, lat=0.0, lon=0.0, heading_deg=None, speed_kmh=0.0, fix_type="none")
+        self._pose = Pose(
+            timestamp=0.0, lat=0.0, lon=0.0, heading_deg=None, elevation_deg=None, speed_kmh=0.0, fix_type="none"
+        )
         self._tasks: list[asyncio.Task[None]] = []
 
     async def start(self) -> None:
@@ -118,11 +128,13 @@ class RtkGnssProvider(NavigationProvider):
         self._parser.feed_line(text)
         state = self._parser.get_state()
         heading_deg = _heading_deg(state, self._baseline_length_m)
+        elevation_deg = _elevation_deg(state)
         self._pose = Pose(
             timestamp=time.time(),
             lat=state.lat or 0.0,
             lon=state.lon or 0.0,
             heading_deg=heading_deg,
+            elevation_deg=elevation_deg,
             speed_kmh=state.speed or 0.0,
             fix_type=state.quality_str,
         )

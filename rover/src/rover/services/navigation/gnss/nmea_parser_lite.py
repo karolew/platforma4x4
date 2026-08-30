@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import copy
 import logging
+import math
 from dataclasses import dataclass
 from typing import Callable, Optional
 
@@ -170,6 +171,18 @@ class NavigationState:
     @property
     def baseline_mode_035_str(self) -> Optional[str]:
         return MODES.get(self.baseline_mode_035)
+
+    @property
+    def baseline_elevation_deg_035(self) -> Optional[float]:
+        """Kat elewacji wektora baseline PSTI,035 wzgledem plaszczyzny poziomej
+        (atan2(U, |EN|)) - sens fizyczny (pitch/roll) zalezy od osi montazu anten."""
+        e, n, u = self.baseline_e_035, self.baseline_n_035, self.baseline_u_035
+        if e is None or n is None or u is None:
+            return None
+        horiz = math.hypot(e, n)
+        if horiz == 0 and u == 0:
+            return None
+        return math.degrees(math.atan2(u, horiz))
 
 
 class NMEAParser:
