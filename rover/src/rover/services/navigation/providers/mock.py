@@ -12,4 +12,4 @@ class MockNavigationProvider(NavigationProvider):
     async def stop(self) -> None: ...
 
     async def read_pose(self) -> Pose:
-        return Pose(timestamp=time.time(), lat=0.0, lon=0.0, heading_deg=0.0, speed_kmh=0.0, fix_type="none")
+        return Pose(timestamp=time.time(), lat=0.0, lon=0.0, heading_deg=None, speed_kmh=0.0, fix_type="none")

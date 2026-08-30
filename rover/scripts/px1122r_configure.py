@@ -31,6 +31,16 @@ base-serial, power-mode) replikuja 1:1 komendy z GNSS Viewer, ktory wg naglowka
 komendy_z_gnss_viewer.txt zawsze zapisuje do SRAM+FLASH - wiec dla nich save_to_flash
 jest zawsze True, `--save` nie ma tam znaczenia. `get serial detect` nie dotyczy
 save_to_flash (tylko odczyt).
+
+ZAKRES `rtk slave-serial` vs `rtk base-serial` (wg NS-HP-GN2-User-Guide.pdf, cytat
+2026-08-26 - wymagane przy advanced moving base >=4Hz): `slave-serial` konfiguruje
+"receiver C moving base rover RXD2 UART" - dotyczy WYLACZNIE Rovera, uruchamiaj tylko
+z `rover` (dlatego przyklad wyzej juz nie pokazuje `base|rover`). `base-serial`
+konfiguruje "receiver B & C I2C mapped UART" - trzeba wyslac do OBU jednostek osobno
+(`base` i `rover`), bo obie strony linku musza miec zgodny baudrate. Trzeci element z
+dokumentacji, glowny UART TXD Base, to zwykle `set serial baud=` (0x05) - w tym
+projekcie juz potwierdzony na 460800 (>=230400 wymagane), wiec zwykle nie trzeba go
+ruszac.
 """
 from __future__ import annotations
 

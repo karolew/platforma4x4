@@ -9,10 +9,19 @@ nigdy odczytowi danych w petli glownej.
 from __future__ import annotations
 
 import asyncio
+import os
 from typing import Literal
 
-import serial
-from gpiozero import DigitalOutputDevice
+# Wymuszone PRZED importem gpiozero: bez tego gpiozero probuje kolejno lgpio -> RPi.GPIO
+# -> pigpio, konczac i tak na NativeFactory (dziala poprawnie dla prostego DigitalOutputDevice
+# tutaj) - ale po drodze lgpio failuje z "xCreatePipe: Can't set permissions" (brak prawa
+# zapisu pliku powiadomien .lgd-nfyN w biezacym katalogu roboczym, np. /opt/rover) i rzuca
+# 3 ostrzezenia PinFactoryFallback. setdefault (nie nadpisuje), gdyby ktos chcial wymusic
+# inny pin factory przez zmienna srodowiskowa.
+os.environ.setdefault("GPIOZERO_PIN_FACTORY", "native")
+
+import serial  # noqa: E402
+from gpiozero import DigitalOutputDevice  # noqa: E402
 
 Target = Literal["base", "rover"]
 

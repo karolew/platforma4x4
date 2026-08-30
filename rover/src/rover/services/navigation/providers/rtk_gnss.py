@@ -10,24 +10,39 @@ from __future__ import annotations
 
 import asyncio
 import time
+from typing import Optional
 
 from rover.common.messages.nav import Pose
-from rover.services.navigation.gnss.nmea_parser import NMEAParser
+from rover.services.navigation.gnss.nmea_parser_lite import NavigationState, NMEAParser
 from rover.services.navigation.gnss.ntrip_client import NtripClient
 from rover.services.navigation.gnss.px1122r_bus import Px1122rBus
 from rover.services.navigation.interface import NavigationProvider
 
 
-_HEADING_RAW_LOG_PATH = "/tmp/heading_raw.log"
+# Heading (THS) jest wiarygodny tylko gdy pochodzi z tej samej fizycznej bazy co
+# skonfigurowany baseline_length_m (Rover, operational_function=MOVING_BASE) - PSTI,035
+# niesie zmierzona dlugosc tej samej baseline. Rozjazd > tolerancji = zly fix ambiguity
+# albo zla konfiguracja - heading traktowany jako niewiarygodny.
+_HEADING_BASELINE_TOLERANCE = 0.10
 
 
 def _is_gga(sentence: str) -> bool:
     return sentence.startswith("$") and sentence[1:].split(",", 1)[0].endswith("GGA")
 
 
-def _is_heading_sentence(sentence: str) -> bool:
-    """PSTI,032/,035 (baseline_course) i THS (heading) - zrodla Pose.heading_deg."""
-    return "PSTI,032" in sentence or "PSTI,035" in sentence or "THS" in sentence
+def _heading_deg(state: NavigationState, configured_baseline_m: float) -> Optional[float]:
+    """THS heading, ale tylko gdy status='A' I zmierzony baseline (PSTI,035) zgadza sie
+    (+/-10%) ze skonfigurowanym baseline_length_m - patrz _HEADING_BASELINE_TOLERANCE.
+    None (nie 0.0!) w kazdym innym przypadku - robot autonomiczny konsumuje ten Pose,
+    nie zgadujemy heading.
+    """
+    if state.heading_deg is None or state.heading_mode != "A":
+        return None
+    if state.baseline_len_035 is None or configured_baseline_m <= 0:
+        return None
+    if abs(state.baseline_len_035 - configured_baseline_m) > configured_baseline_m * _HEADING_BASELINE_TOLERANCE:
+        return None
+    return state.heading_deg
 
 
 class RtkGnssProvider(NavigationProvider):
@@ -38,10 +53,12 @@ class RtkGnssProvider(NavigationProvider):
         mux_select_gpio: int = 17,
         ntrip: dict[str, object] | None = None,
         gga_interval_s: float = 300.0,
+        baseline_length_m: float = 1.0,  # dlugosc anten Base<->Rover (moving base) - patrz configure_as_rover(); zrodlo prawdy dla walidacji heading_deg (_heading_deg)
     ) -> None:
         ntrip = ntrip or {}
         self._gga_interval_s = gga_interval_s
         self._last_gga_sent_at = 0.0
+        self._baseline_length_m = baseline_length_m
         self._bus = Px1122rBus(uart_port, baudrate, mux_select_gpio)
         self._ntrip = NtripClient(
             host=str(ntrip.get("host", "")),
@@ -50,10 +67,10 @@ class RtkGnssProvider(NavigationProvider):
             user=str(ntrip.get("user", "")),
             password=str(ntrip.get("password", "")),
         )
-        self._parser = NMEAParser(units=2)  # units=2: get_speed() konwertuje wezly->km/h (Pose.speed_kmh); domyslne units=1 zostawia surowe wezly
-        self._pose = Pose(timestamp=0.0, lat=0.0, lon=0.0, heading_deg=0.0, speed_kmh=0.0, fix_type="none")
+        # unit_format="iso8601": speed w km/h (Pose.speed_kmh); coord_format="decimal_degrees": lat/lon jako stopnie dziesietne
+        self._parser = NMEAParser(unit_format="iso8601", coord_format="decimal_degrees")
+        self._pose = Pose(timestamp=0.0, lat=0.0, lon=0.0, heading_deg=None, speed_kmh=0.0, fix_type="none")
         self._tasks: list[asyncio.Task[None]] = []
-        self._heading_log_queue: asyncio.Queue[str] = asyncio.Queue()
 
     async def start(self) -> None:
         await self._bus.start()
@@ -61,7 +78,6 @@ class RtkGnssProvider(NavigationProvider):
         self._tasks = [
             asyncio.create_task(self._rtcm_forward_loop()),
             asyncio.create_task(self._nmea_read_loop()),
-            asyncio.create_task(self._heading_log_writer_loop()),
         ]
 
     async def stop(self) -> None:
@@ -75,13 +91,6 @@ class RtkGnssProvider(NavigationProvider):
             if task.done():
                 task.result()  # propaguje wyjatek z tla (np. NotImplementedError z parsera)
         return self._pose
-
-    async def _heading_log_writer_loop(self) -> None:
-        with open(_HEADING_RAW_LOG_PATH, "a") as f:
-            while True:
-                line = await self._heading_log_queue.get()
-                f.write(line)
-                f.flush()
 
     async def _rtcm_forward_loop(self) -> None:
         while True:
@@ -106,28 +115,17 @@ class RtkGnssProvider(NavigationProvider):
         if not text.startswith("$"):
             return
 
-        self._parser.parse(text)
+        self._parser.feed_line(text)
+        state = self._parser.get_state()
+        heading_deg = _heading_deg(state, self._baseline_length_m)
         self._pose = Pose(
             timestamp=time.time(),
-            lat=self._parser.lat or 0.0,
-            lon=self._parser.lon or 0.0,
-            heading_deg=self._parser.baseline_course or self._parser.heading or 0.0,
-            speed_kmh=self._parser.speed or 0.0,
-            fix_type=self._parser.quality or "none",
+            lat=state.lat or 0.0,
+            lon=state.lon or 0.0,
+            heading_deg=heading_deg,
+            speed_kmh=state.speed or 0.0,
+            fix_type=state.quality_str,
         )
-
-        if _is_heading_sentence(text):
-            # raw + sparsowane dane PO parserze - do korelacji przy debugowaniu (samo raw
-            # PSTI,032 nie mowi nic o tym co faktycznie zasila Pose.heading_deg - patrz
-            # baseline_course/heading nizej). Zapis na dysk idzie przez kolejke do osobnego
-            # taska (_heading_log_writer_loop), zeby blokujace I/O nie stalo petli odczytu
-            # UART (przy 460800 baud grozilo to overrunem/gubieniem bajtow - patrz
-            # sklejone/uszkodzone linie w starych logach).
-            self._heading_log_queue.put_nowait(
-                f"{time.time()} {text} | baseline_course_035={self._parser.baseline_course} "
-                f"heading_ths={self._parser.heading} baseline_mode_035={self._parser.baseline_mode} "
-                f"mode_032={self._parser.mode_032} pose_heading_deg={self._pose.heading_deg}\n"
-            )
 
         if _is_gga(text):
             now = time.time()

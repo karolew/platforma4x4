@@ -48,9 +48,17 @@ RTK_BASE_FUNC_STATIC = 2
 # WYWNIOSKOWANY z konwencji "query = configure_sid + 1" (potwierdzonej niezaleznie na
 # parach 0x06/0x07 i 0x13/0x14) - oryginalna komenda RTK 2 w pliku byla uszkodzona
 # (brak `\x` przed hex w zrzucie), wiec do potwierdzenia na sprzecie.
-_SLAVE_SERIAL_BAUD_SID = 0x0C
+#
+# WAZNE - zakres stosowania (wg NS-HP-GN2-User-Guide.pdf, cytat 2026-08-26): przy
+# advanced moving base >=4Hz trzeba osobno skonfigurowac na 230400: (1) glowny UART
+# TXD Base [_SERIAL_PORT_MSG=0x05, NIE tutaj], (2) "receiver C moving base rover RXD2
+# UART" = SLAVE SERIAL PONIZEJ - dotyczy WYLACZNIE Rovera (target="rover"), Base nie ma
+# tu roli, (3) "receiver B & C I2C mapped UART" = BASE SERIAL PONIZEJ - trzeba wyslac
+# do OBU jednostek osobno (target="base" I target="rover"), bo obie strony linku musza
+# miec zgodny baudrate.
+_SLAVE_SERIAL_BAUD_SID = 0x0C  # tylko Rover - patrz uwaga wyzej
 _SLAVE_SERIAL_BAUD_QUERY_SID = 0x0D  # niepotwierdzone na sprzecie, patrz wyzej
-_BASE_SERIAL_BAUD_SID = 0x13
+_BASE_SERIAL_BAUD_SID = 0x13  # ustawic na OBU jednostkach - patrz uwaga wyzej
 _BASE_SERIAL_BAUD_QUERY_SID = 0x14
 
 # Standardowe komendy SkyTraq (top-level msg_id, inna przestrzen niz sub-SID w 0x6A
