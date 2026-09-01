@@ -1,8 +1,11 @@
 # ROVER — deploy na Raspberry Pi
 
-Zakładany sprzęt: Raspberry Pi 3, Raspberry Pi OS Lite (64-bit), moduł CAN podłączony po SPI (np. HAT na MCP2515 — dopasuj `dtoverlay` do swojego HAT-a).
+## Sprzęt i OS
+- Raspberry Pi 3
+- Raspberry Pi OS Lite (64-bit)
+- moduł CAN podłączony po SPI.
 
-## 1. Karta SD
+## Karta SD
 
 1. Wypal **Raspberry Pi OS Lite (64-bit)** przez Raspberry Pi Imager.
 2. W ustawieniach Imagera (ikona koła zębatego) ustaw od razu: hostname (np. `rover-01`), włącz SSH, użytkownika/hasło, Wi-Fi (jeśli potrzebne).
@@ -11,14 +14,14 @@ Zakładany sprzęt: Raspberry Pi 3, Raspberry Pi OS Lite (64-bit), moduł CAN po
    ssh <user>@rover-01.local
    ```
 
-## 2. Aktualizacja systemu
+## Aktualizacja systemu
 
 ```bash
 sudo apt update && sudo apt full-upgrade -y
 sudo reboot
 ```
 
-## 3. Interfejs CAN
+## Interfejs CAN
 
 1. Włącz SPI:
    ```bash
@@ -29,7 +32,12 @@ sudo reboot
    dtparam=spi=on
    dtoverlay=mcp2515-can0,oscillator=8000000,interrupt=25,spimaxfrequency=1000000
    ```
-   Wartości zweryfikowane na module **HW-184** (MCP2515 + transceiver VP230, zasilanie 3.3V, kryształ 8 MHz) — sprawdź kryształ na swojej płytce, jeśli masz inny moduł (`dmesg | grep -i mcp2515` po reboocie musi pokazać `successfully initialized`). `interrupt` to numer GPIO podłączony do pinu INT modułu (tu: GPIO25) — dopasuj jeśli okablowałeś inaczej. **CS musi być podłączony** (GPIO8/CE0) — bez niego MCP2515 się nie zainicjalizuje.
+   Dla MCP2515 + transceiver VP230, zasilanie 3.3V, 8 MHz.
+   Weryfikacja
+   ```
+   dmesg | grep -i mcp2515
+   ```
+   po reboocie musi pokazać `successfully initialized`
 3. Zainstaluj narzędzia CAN i podnieś interfejs:
    ```bash
    sudo apt install -y can-utils
@@ -52,7 +60,7 @@ sudo reboot
    ip -details -statistics link show can0
    ```
 
-## 4. Interfejs UART (PX1122R)
+## Interfejs UART (PX1122R)
 
 RPi3 ma tylko jeden sprzętowy UART (PL011), a domyślnie jest on podłączony do Bluetooth — GPIO14/15 dostaje wtedy słabszy mini-UART (`/dev/ttyS0`), którego nazwa/stabilność zależy od taktowania CPU. Do PX1122R (przez mux 74HC4053) potrzebny jest pełny PL011 jako `/dev/ttyAMA0`.
 

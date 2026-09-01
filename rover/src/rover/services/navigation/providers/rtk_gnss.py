@@ -136,6 +136,10 @@ class RtkGnssProvider(NavigationProvider):
             heading_deg=heading_deg,
             elevation_deg=elevation_deg,
             speed_kmh=state.speed or 0.0,
+            course_deg=state.course_deg,
+            alt_msl_m=state.alt,
+            baseline_e_m=state.baseline_e_035,
+            baseline_n_m=state.baseline_n_035,
             fix_type=state.quality_str,
         )
 
