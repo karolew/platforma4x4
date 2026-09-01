@@ -386,8 +386,8 @@ class HeadingDemoApp:
         tip = polar(cx, cy, r - 24, 90 - heading)
         tail = polar(cx, cy, (r - 24) * 0.2, 90 - heading + 180)
         c.create_line(*tail, *tip, fill=color, width=2, arrow=tk.LAST, arrowshape=(10, 12, 3), capstyle=tk.ROUND)
-        suffix = " (stare)" if stale else ""
-        c.create_text(cx, cy + r + 22, text=f"{heading:.1f} deg{suffix}", fill=color, font=("Consolas", 14, "bold"))
+        # suffix = " (stare)" if stale else ""
+        # c.create_text(50, cy + r + 22, text=f"{heading:.1f} deg{suffix}", fill=color, font=("Consolas", 14, "bold"))
 
     def _draw_elevation(self, elevation: Optional[float], stale: bool) -> None:
         c = self.elev
@@ -414,8 +414,8 @@ class HeadingDemoApp:
         elevation = max(-90.0, min(90.0, elevation))
         tip = polar(vx, vy, r - 24, elevation)
         c.create_line(vx, vy, *tip, fill=color, width=2, arrow=tk.LAST, arrowshape=(10, 12, 3), capstyle=tk.ROUND)
-        suffix = " (stare)" if stale else ""
-        c.create_text(vx + r / 2, vy + r + 22, text=f"{elevation:.1f} deg{suffix}", fill=color, font=("Consolas", 14, "bold"))
+        # suffix = " (stare)" if stale else ""
+        # c.create_text(50, vy + r + 32, text=f"{elevation:.1f} deg{suffix}", fill=color, font=("Consolas", 14, "bold"))
 
 
 class SimulatedFeed:
